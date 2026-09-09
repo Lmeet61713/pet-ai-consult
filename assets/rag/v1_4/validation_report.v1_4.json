@@ -1,0 +1,40 @@
+{
+  "version": "1.4.0-open-mvp-truth-repair-draft",
+  "generated_at": "2026-08-12",
+  "status": "PASS",
+  "counts": {
+    "knowledge_cards": 260,
+    "emergency_rules": 40,
+    "total_records": 300,
+    "sources": 116,
+    "repair_manifest_rows": 300,
+    "categories": 27
+  },
+  "checks": {
+    "duplicate_ids": 0,
+    "prohibited_or_noncommercial_source_references": 0,
+    "missing_evidence_or_locator": 0,
+    "locator_not_found": 0,
+    "title_mismatch": 0,
+    "dosage_like_output": 0,
+    "production_eligible_records": 0,
+    "records_not_in_repair_manifest": 0
+  },
+  "prohibited_source_ids": [
+    "PMC10811764",
+    "PMC11103317",
+    "PMC12277680",
+    "PMC12665832",
+    "PMC5354050",
+    "PMC5645811",
+    "PMC7830180"
+  ],
+  "overused_sources": [],
+  "errors": [],
+  "warnings": [],
+  "limitations": [
+    "来源真实性、题名、商业许可和章节定位已做机器与人工组合核对；未替代逐条执业兽医临床审稿。",
+    "所有记录均保持 test 且 production_eligible=false。",
+    "约85%覆盖仍是分类配额估计，需用真实问题集测量 top-k 可回答召回率。"
+  ]
+}

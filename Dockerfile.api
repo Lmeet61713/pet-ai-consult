@@ -1,0 +1,58 @@
+# 问诊 API 镜像 v4（2026-08-19 修复）
+# - 队列化发布端: pyrocketmq(JPype) 需要 Java 17 + RocketMQ 4.9.8 发行包(lib/*)
+# - 混合检索: BGE-M3(FlagEmbedding + CPU torch); 模型文件走 volume 挂载, 不进镜像
+# - RAG v1_8 资产打进镜像; 模型目录(/models)由 compose 挂载
+# - v4 变更: ① 先 COPY 代码再 pip install(修复空包问题); ② 补 pyrocketmq + jpype1 安装
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1
+
+# Java(pyrocketmq/JPype) + unzip/curl(构建期)
+# python:3.12-slim(Debian 12) 使用 OpenJDK 17，与 pyrocketmq/JPype 需求一致。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless curl unzip gcc g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1) 业务依赖: 全部锁定 requirements.lock(实测版本), 避免 pip 装最新版不兼容
+#    2026-08-19: requirements.lock 从 AutoDL 实测环境生成(20 个包全部锁定)
+COPY requirements.lock ./
+COPY pyproject.toml ./
+COPY app ./app
+
+# 2026-08-21: 清理误入上下文的 __pycache__（旧 pyc 会导致运行时行为不一致）
+RUN find /app -name '__pycache__' -type d -prune -exec rm -rf {} + || true
+# torch 走 CPU 索引单独装(lock 里不重复), 其余按 lock 一次安装
+RUN pip install --no-cache-dir \
+        "https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl" \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+ && pip install --no-cache-dir -r requirements.lock \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 2) 本包(代码已 COPY, 依赖已装, 此处只注册包元数据)
+RUN pip install --no-cache-dir --no-deps .
+
+# 3) RocketMQ 4.9.8 发行包(pyrocketmq 的 classpath 依赖 lib/*; 也可 COPY 本地包)
+#    2026-08-19: 清华镜像对容器 curl 返回 403, 改用 Apache 官方 archive 源(实测 200)
+RUN curl -fsSL -o /tmp/rmq498.zip \
+        https://archive.apache.org/dist/rocketmq/4.9.8/rocketmq-all-4.9.8-bin-release.zip \
+    && unzip -q /tmp/rmq498.zip -d /opt \
+    && mv /opt/rocketmq-all-4.9.8-bin-release /opt/rocketmq-498 \
+    && rm -f /tmp/rmq498.zip
+
+# 4) 配置 + 脚本 + 资产(v1_8)
+COPY configs ./configs
+COPY scripts ./scripts
+COPY assets ./assets
+
+ENV APP_ENV=production \
+    MOCK_MODE=false \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    CONSULT_MQ_CLASSPATH=/opt/rocketmq-498/lib/*
+
+EXPOSE 8100
+
+# 启动即含 Worker 循环 + Outbox 扫描 + 队列监控(APP_PORT 可覆盖)
+CMD ["sh", "-c", "uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${APP_PORT:-8100} --workers 1"]

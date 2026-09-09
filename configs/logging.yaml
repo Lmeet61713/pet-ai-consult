@@ -1,0 +1,13 @@
+# 日志配置（v5 §21：结构化 JSON；实际由 app/core/logging.py 控制，此文件为部署参考）
+version: 1
+formatters:
+  json:
+    "()": app.core.logging.JsonFormatter
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: json
+root:
+  level: INFO
+  handlers: [console]
+disable_existing_loggers: false

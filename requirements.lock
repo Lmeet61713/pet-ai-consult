@@ -1,0 +1,24 @@
+# 依赖锁定文件（2026-08-19 从 AutoDL 实测环境生成）
+# 基础业务依赖（对应 pyproject dependencies）
+fastapi==0.136.3
+uvicorn[standard]==0.52.1
+pydantic==2.13.4
+pydantic-settings==2.14.2
+redis==8.1.0
+httpx==0.28.1
+pillow==12.3.0
+python-multipart==0.0.32
+PyYAML==6.0.3
+PyJWT==2.13.0
+sqlalchemy[asyncio]==2.0.52
+asyncpg==0.31.0
+
+# BGE-M3 检索栈（CPU；torch 在 Dockerfile 单独用 CPU 索引安装）
+FlagEmbedding==1.4.0
+numpy==2.3.5
+pandas==2.2.3
+six==1.17.0
+
+# RocketMQ 发布端（JPype 桥接，实测版本）
+pyrocketmq==0.3.4
+jpype1==1.7.1

@@ -1,0 +1,25 @@
+{
+  "version": "1.4.0-open-mvp-truth-repair-draft",
+  "generated_at": "2026-08-12",
+  "knowledge_cards": 260,
+  "emergency_rules": 40,
+  "categories": 27,
+  "target": {
+    "point_estimate": 0.85,
+    "claim_status": "provisional_taxonomy_based_estimate_not_measured_recall",
+    "population": "Chinese-language daily cat-and-dog owner health education and triage questions"
+  },
+  "effect_of_repair": "Record count and taxonomy breadth were retained, but several claims were narrowed to the species and situation directly supported by evidence.",
+  "required_measurement": {
+    "minimum_real_questions": 500,
+    "recommended_real_questions": 1000,
+    "primary_metric": "top-4 answerable recall",
+    "safety_metrics": [
+      "emergency-rule recall",
+      "species correctness",
+      "unsafe-answer rate",
+      "unanswerable abstention precision"
+    ]
+  },
+  "release_note": "Do not state 85% as measured production performance until a stratified blind evaluation is completed."
+}

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.git/
+tests/
+runtime/
+*.log
+.env
+.env.docker
+models_placeholder/
+.test-tmp/
+.pytest_cache/

@@ -1,0 +1,164 @@
+# 急症规则（v6.3 §13.2）：命中 → force_urgent_guidance（不停止回答，切换急症指导模式）
+# precheck_text 只查文字（流程最前置，纯规则不调外部服务）；
+# evaluate 合并文字 + 图片 red_flags + 宠物档案（脆弱上调）。
+# immediate_actions / avoid_actions 进入固定急症模板与急症回答 prompt。
+
+- id: breathing_emergency
+  level: emergency
+  vet_urgency: emergency
+  species: [cat, dog]
+  any_keywords:
+    - 呼吸困难
+    - 张口呼吸
+    - 呼吸急促
+    - 喘不过气
+    - 舌头发紫
+    - 发绀
+    - 口唇发紫
+    - 喘得厉害
+    - 大喘气
+  force_urgent_guidance: true
+  immediate_actions:
+    - 保持宠物安静，减少搬动
+    - 使用通风的运输箱尽快前往宠物医院
+  avoid_actions:
+    - 不要强行喂食、喂水或喂药
+    - 不要摇晃或拍打试图"唤醒"
+
+- id: seizure_coma
+  level: emergency
+  vet_urgency: emergency
+  species: [cat, dog]
+  any_keywords:
+    - 抽搐
+    - 癫痫
+    - 昏迷
+    - 失去意识
+    - 叫不醒
+    - 无法站立
+    - 站不起来
+    - 瘫软
+    - 口吐白沫
+  force_urgent_guidance: true
+  immediate_actions:
+    - 移除周围可能碰撞的硬物，让宠物侧卧
+    - 记录发作持续时间，立即送医
+  avoid_actions:
+    - 不要强行按压宠物
+    - 不要把手伸进嘴里
+
+- id: severe_bleeding
+  level: emergency
+  vet_urgency: emergency
+  species: [cat, dog]
+  any_keywords:
+    - 大量出血
+    - 流血不止
+    - 喷血
+    - 严重外伤
+    - 大伤口
+    - 血染
+    - 一直流血
+  force_urgent_guidance: true
+  immediate_actions:
+    - 用干净纱布或毛巾按压伤口止血
+    - 立即前往最近的宠物医院
+  avoid_actions:
+    - 不要使用止血粉或人用药物
+    - 不要反复揭开伤口查看
+
+- id: poisoning
+  level: emergency
+  vet_urgency: emergency
+  species: [cat, dog]
+  # V1.1 P2-2：裸词 "吞了/误食" 过宽（"吞了毛球"会被误判急症），
+  # 只保留明确毒物/危险物语境（context_patterns）
+  any_keywords:
+    - 中毒
+  context_patterns:
+    - "吃了.{0,6}(药|毒|老鼠药|巧克力|百合|清洁剂|消毒液|葡萄|洋葱|酒精|洗洁精)"
+    - "误食.{0,6}(药物|毒物|清洁剂|巧克力|百合|老鼠药)"
+    - "吞了.{0,6}(药|毒|老鼠药|巧克力|百合|清洁剂|消毒液|葡萄|洋葱|酒精|洗洁精|硬币|玩具)"
+  force_urgent_guidance: true
+  immediate_actions:
+    - 立即联系宠物医院或宠物毒物热线
+    - 保留误食物品的包装或样本
+  avoid_actions:
+    - 不要自行催吐
+    - 不要自行喂牛奶或药物
+
+- id: vomiting_diarrhea
+  level: high
+  vet_urgency: urgent
+  species: [cat, dog]
+  any_keywords:
+    - 持续呕吐
+    - 一直吐
+    - 吐个不停
+    - 严重腹泻
+    - 拉血
+    - 便血
+    - 血便
+  context_patterns:
+    - "呕吐.{0,4}(24|一天)"
+  force_urgent_guidance: true
+  immediate_actions:
+    - 少量多次补充水分
+    - 尽快就医排查原因
+  avoid_actions:
+    - 不要继续喂食加重胃肠负担
+
+- id: urinary_block
+  level: emergency
+  vet_urgency: emergency
+  species: [cat, dog]
+  any_keywords:
+    - 尿闭
+    - 尿不出
+    - 排不出尿
+    - 频繁蹲
+    - 反复蹲坑
+  context_patterns:
+    - "一天.{0,6}(没|不).{0,4}尿"
+  force_urgent_guidance: true
+  immediate_actions:
+    - 立即送医（尤其公猫，可能危及生命）
+  avoid_actions:
+    - 不要自行按摩腹部或导尿
+
+- id: abdominal_bloat
+  level: high
+  vet_urgency: urgent
+  species: [cat, dog]
+  any_keywords:
+    - 腹部膨大
+    - 腹部鼓胀
+    - 肚子鼓
+    - 肚子胀
+  context_patterns:
+    - "腹部.{0,4}(膨大|鼓胀|胀大)"
+    - "肚子.{0,4}(鼓|胀|大).{0,6}(痛|叫|难受)"
+  force_urgent_guidance: true
+  immediate_actions:
+    - 尽快就医排查
+  avoid_actions:
+    - 不要按压腹部
+    - 不要喂食
+
+- id: major_trauma
+  level: emergency
+  vet_urgency: emergency
+  species: [cat, dog]
+  any_keywords:
+    - 车祸
+    - 被车撞
+    - 坠楼
+    - 高空坠落
+  context_patterns:
+    - "从.{0,4}(楼上|高处).{0,4}(摔|掉)"
+  force_urgent_guidance: true
+  immediate_actions:
+    - 用硬板或箱子平稳托起宠物，减少震动
+    - 尽快就医（外观正常也可能有内伤）
+  avoid_actions:
+    - 不要随意搬动可能骨折的部位

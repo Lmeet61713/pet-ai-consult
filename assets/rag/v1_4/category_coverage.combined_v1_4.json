@@ -1,0 +1,191 @@
+[
+  {
+    "category": "dermatology",
+    "cards": 22,
+    "cat": 4,
+    "dog": 12,
+    "both": 6
+  },
+  {
+    "category": "gastrointestinal",
+    "cards": 18,
+    "cat": 7,
+    "dog": 10,
+    "both": 1
+  },
+  {
+    "category": "toxicology",
+    "cards": 15,
+    "cat": 4,
+    "dog": 5,
+    "both": 6
+  },
+  {
+    "category": "oral",
+    "cards": 14,
+    "cat": 6,
+    "dog": 5,
+    "both": 3
+  },
+  {
+    "category": "eye",
+    "cards": 14,
+    "cat": 7,
+    "dog": 7,
+    "both": 0
+  },
+  {
+    "category": "reproductive",
+    "cards": 14,
+    "cat": 5,
+    "dog": 8,
+    "both": 1
+  },
+  {
+    "category": "pediatrics",
+    "cards": 12,
+    "cat": 1,
+    "dog": 2,
+    "both": 9
+  },
+  {
+    "category": "behavior",
+    "cards": 11,
+    "cat": 7,
+    "dog": 4,
+    "both": 0
+  },
+  {
+    "category": "respiratory",
+    "cards": 10,
+    "cat": 4,
+    "dog": 5,
+    "both": 1
+  },
+  {
+    "category": "nutrition",
+    "cards": 10,
+    "cat": 4,
+    "dog": 2,
+    "both": 4
+  },
+  {
+    "category": "endocrine",
+    "cards": 10,
+    "cat": 4,
+    "dog": 3,
+    "both": 3
+  },
+  {
+    "category": "infectious",
+    "cards": 10,
+    "cat": 5,
+    "dog": 5,
+    "both": 0
+  },
+  {
+    "category": "diagnostics",
+    "cards": 10,
+    "cat": 2,
+    "dog": 2,
+    "both": 6
+  },
+  {
+    "category": "ear",
+    "cards": 9,
+    "cat": 2,
+    "dog": 6,
+    "both": 1
+  },
+  {
+    "category": "parasites",
+    "cards": 9,
+    "cat": 2,
+    "dog": 1,
+    "both": 6
+  },
+  {
+    "category": "home_monitoring",
+    "cards": 9,
+    "cat": 1,
+    "dog": 3,
+    "both": 5
+  },
+  {
+    "category": "urinary",
+    "cards": 8,
+    "cat": 4,
+    "dog": 3,
+    "both": 1
+  },
+  {
+    "category": "preventive_care",
+    "cards": 8,
+    "cat": 1,
+    "dog": 1,
+    "both": 6
+  },
+  {
+    "category": "renal",
+    "cards": 8,
+    "cat": 4,
+    "dog": 2,
+    "both": 2
+  },
+  {
+    "category": "cardiac",
+    "cards": 8,
+    "cat": 3,
+    "dog": 5,
+    "both": 0
+  },
+  {
+    "category": "senior_cognitive",
+    "cards": 8,
+    "cat": 2,
+    "dog": 4,
+    "both": 2
+  },
+  {
+    "category": "pancreatic_hepatobiliary",
+    "cards": 7,
+    "cat": 0,
+    "dog": 7,
+    "both": 0
+  },
+  {
+    "category": "musculoskeletal",
+    "cards": 4,
+    "cat": 1,
+    "dog": 1,
+    "both": 2
+  },
+  {
+    "category": "grooming",
+    "cards": 4,
+    "cat": 0,
+    "dog": 0,
+    "both": 4
+  },
+  {
+    "category": "minor_injury",
+    "cards": 3,
+    "cat": 0,
+    "dog": 0,
+    "both": 3
+  },
+  {
+    "category": "neurologic",
+    "cards": 3,
+    "cat": 0,
+    "dog": 0,
+    "both": 3
+  },
+  {
+    "category": "anal_sac",
+    "cards": 2,
+    "cat": 0,
+    "dog": 1,
+    "both": 1
+  }
+]

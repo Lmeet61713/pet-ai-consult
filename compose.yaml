@@ -1,0 +1,285 @@
+name: pet-consult-v2
+
+x-gpu-vision: &gpu-vision
+  driver: nvidia
+  device_ids:
+    - ${VISION_GPU_DEVICE:-0}
+  capabilities:
+    - gpu
+
+x-gpu-text: &gpu-text
+  driver: nvidia
+  device_ids:
+    - ${TEXT_GPU_DEVICE:-1}
+  capabilities:
+    - gpu
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-consult}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD}
+      POSTGRES_DB: consult
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - consult
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        set -- redis-server --bind 0.0.0.0 --protected-mode no --appendonly yes
+        if [ -n "$$REDIS_PASSWORD" ]; then set -- "$$@" --requirepass "$$REDIS_PASSWORD"; fi
+        exec "$$@"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # 2026-08-21: requirepass 后 ping 需带密码
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - consult
+    restart: unless-stopped
+
+  consult-vllm-vision:
+    # 2026-08-19: 升级 v0.27.1(cu13) —— v0.26(cu128) 在 SM120 上 kernel 回退仅 44 t/s
+    # 2026-08-20: gpu profile —— 本地 mock 联调跳过，服务器 --profile gpu 启用
+    profiles: ["gpu"]
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.27.1}
+    command:
+      - --model
+      - /models/Qwen3.5-4B
+      - --served-model-name
+      - Qwen3.5-4B
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+      - --max-model-len
+      - "8192"
+      - --gpu-memory-utilization
+      - ${VISION_GPU_MEMORY_UTILIZATION:-0.85}
+      - --max-num-seqs
+      - ${VISION_VLLM_MAX_NUM_SEQS:-16}
+    environment:
+      VLLM_ATTENTION_BACKEND: FLASH_ATTN
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+    volumes:
+      - ${MODEL_DIR:?set MODEL_DIR}:/models:ro
+    shm_size: 16gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - *gpu-vision
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/v1/models', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    networks:
+      - consult
+    restart: unless-stopped
+
+  consult-vision-gateway:
+    # 2026-08-19 新增: API 调用 /v1/vision 契约, vLLM 只有 /v1/chat/completions,
+    # 必须经 VisionGateway 转发(见 app/vision_server.py); 否则图片问诊 404
+    # 2026-08-20: gpu profile —— 本地 mock 联调不需要
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["python", "-m", "uvicorn", "app.vision_server:create_app", "--factory", "--host", "0.0.0.0", "--port", "8102"]
+    environment:
+      VLLM_BASE_URL: http://consult-vllm-vision:8001
+      # 视觉模型是 4B（默认值 9B 必须覆盖）
+      VLLM_MODEL_NAME: Qwen3.5-4B
+      VISION_SCENE: pet_consult_image
+      VISION_PRIORITY: "0"
+      VISION_CONCURRENCY: ${VISION_CONCURRENCY:-4}
+      VISION_MAX_QUEUE_SIZE: ${VISION_MAX_QUEUE_SIZE:-12}
+      VISION_MAX_REQUEST_SECONDS: ${VISION_MAX_REQUEST_SECONDS:-45}
+    depends_on:
+      consult-vllm-vision:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8102/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - consult
+    restart: unless-stopped
+
+  consult-vllm-text:
+    # DeepSeek 过渡期：设置 CONSULT_TEXT_PROFILE=deepseek 则不启动本容器
+    # 2026-08-20: local-model → gpu profile（本地 mock 联调跳过，服务器 --profile gpu 启用）
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.27.1}
+    profiles:
+      - gpu
+    command:
+      - --model
+      - /models/Qwen3.5-9B
+      - --served-model-name
+      - Qwen3.5-9B
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8002"
+      - --max-model-len
+      - "8192"
+      - --gpu-memory-utilization
+      - ${TEXT_GPU_MEMORY_UTILIZATION:-0.85}
+      - --max-num-seqs
+      - ${TEXT_VLLM_MAX_NUM_SEQS:-16}
+      - --enable-prefix-caching
+    environment:
+      VLLM_ATTENTION_BACKEND: FLASH_ATTN
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+    volumes:
+      - ${MODEL_DIR:?set MODEL_DIR}:/models:ro
+    shm_size: 16gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - *gpu-text
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/v1/models', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 150s
+    networks:
+      - consult
+    restart: unless-stopped
+
+  rocketmq-namesrv:
+    # 问诊独立 RocketMQ(集群 pet-consult): 与审核系统实例完全隔离
+    # 2026-08-21: 命名卷 root:root 权限 → 以 root 运行（内部服务）
+    user: "0:0"
+    image: apache/rocketmq:5.3.2
+    command: sh mqnamesrv
+    ports:
+      - "127.0.0.1:${ROCKETMQ_NAMESRV_PORT:-9877}:9876"
+    volumes:
+      - rocketmq_namesrv:/home/rocketmq/logs
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9876' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - consult
+    restart: unless-stopped
+
+  rocketmq-broker:
+    # 2026-08-21: 命名卷 root:root 权限 → 以 root 运行（内部服务）
+    user: "0:0"
+    image: apache/rocketmq:5.3.2
+    # 2026-08-19: 官方镜像用 entrypoint(broker 子命令) 启动, sh mqbroker 会 NPE 崩溃
+    command: broker -c /home/rocketmq/broker.conf
+    volumes:
+      - ./configs/rocketmq-broker-docker.conf:/home/rocketmq/broker.conf:ro
+      - rocketmq_broker:/home/rocketmq/store
+      - rocketmq_broker_logs:/home/rocketmq/logs
+    ports:
+      - "127.0.0.1:${ROCKETMQ_BROKER_PORT:-10912}:10911"
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/10911' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    networks:
+      - consult
+    restart: unless-stopped
+
+  consult-api-1:
+    image: ${CONSULT_API_IMAGE:-pet-consult-api:20260825-image-text-v7.3-rag2-retry1-multipet1}
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file:
+      - .env.docker
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      # 真实模型/Redis/队列：MOCK_MODE 保持 false；鉴权与限流用独立开关（见下）
+      MOCK_MODE: ${MOCK_MODE:-false}
+      # 2026-08-21: 模型开关变量化（本地联调 mock=true；服务器保持 false 用真实模型）
+      MOCK_VISION: ${MOCK_VISION:-false}
+      MOCK_KNOWLEDGE_CONSULT: ${MOCK_KNOWLEDGE_CONSULT:-false}
+      MOCK_GUARD: ${MOCK_GUARD:-false}
+      # 2026-08-20: 跳过 JWT 校验（改用 X-User-Id 头）+ 关闭限流（内部部署）
+      AUTH_SKIP: ${AUTH_SKIP:-true}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-false}
+      CONSULT_MQ_ENABLED: "true"
+      # 2026-08-21: URL 不拼密码（@ 等特殊字符会解析错），密码走独立变量
+      CONSULT_DATABASE_URL: postgresql+asyncpg://${PG_USER:-consult}@postgresql:5432/consult
+      CONSULT_DATABASE_PASSWORD: ${PG_PASSWORD}
+      # 2026-08-21: URL 不带密码（@ 等特殊字符会破坏 URL 解析）；
+      # 密码由 .env.docker 的 REDIS_PASSWORD 单独传入（代码 from_url(password=...)）
+      REDIS_URL: redis://redis:6379/0
+      # 2026-08-19: 指向 VisionGateway(转发到 4B vLLM), 不再直连 vLLM
+      VISION_GATEWAY_BASE_URL: http://consult-vision-gateway:8102
+      # 2026-08-21: 默认纯本地（9B vLLM），不再依赖 DeepSeek API
+      KNOWLEDGE_API_BASE_URL: ${KNOWLEDGE_API_BASE_URL:-http://consult-vllm-text:8002/v1}
+      KNOWLEDGE_MODEL: ${KNOWLEDGE_MODEL:-Qwen3.5-9B}
+      # 2026-08-21: 纯本地生成（RAG grounded 注入知识 + 9B 回答）；可变量覆盖
+      RAG_MODE: ${RAG_MODE:-grounded}
+      RAG_FAST_ANSWER: ${RAG_FAST_ANSWER:-false}
+      RAG_EMBEDDING_MODEL_PATH: /models/bge-m3
+      CONSULT_MQ_NAMESRV_ADDR: rocketmq-namesrv:9876
+      CONSULT_MQ_CLASSPATH: /opt/rocketmq-498/lib/*
+    command: ["python", "-m", "uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
+    ports:
+      - 127.0.0.1:${CONSULT_API_PORT:-18100}:8100
+    volumes:
+      - ./runtime:/app/runtime
+      - ${MODEL_DIR:?set MODEL_DIR}:/models:ro
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rocketmq-namesrv:
+        condition: service_healthy
+      rocketmq-broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - consult
+    restart: unless-stopped
+
+networks:
+  consult:
+    name: pet-consult-net
+
+volumes:
+  pg_data:
+  redis_data:
+  rocketmq_namesrv:
+  rocketmq_broker:
+  rocketmq_broker_logs:

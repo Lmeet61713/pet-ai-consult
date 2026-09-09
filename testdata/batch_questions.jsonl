@@ -1,0 +1,23 @@
+{"id": "qa-01", "text": "猫藓会传染给人吗", "expect_mode": "fast", "conversation_id": "batch-qa-01"}
+{"id": "qa-02", "text": "狗能吃巧克力吗", "conversation_id": "batch-qa-02"}
+{"id": "qa-03", "text": "猫可以喝牛奶吗", "conversation_id": "batch-qa-03"}
+{"id": "qa-04", "text": "狗可以吃葡萄吗", "conversation_id": "batch-qa-04"}
+{"id": "qa-05", "text": "猫狗能一起养吗", "conversation_id": "batch-qa-05"}
+{"id": "followup-01", "text": "狗拉稀怎么办", "expect_mode": "fast", "conversation_id": "batch-fu-01"}
+{"id": "followup-02", "text": "猫吐了怎么办", "expect_mode": "fast", "conversation_id": "batch-fu-02"}
+{"id": "followup-03", "text": "狗一直咳嗽", "expect_mode": "fast", "conversation_id": "batch-fu-03"}
+{"id": "followup-04", "text": "猫眼睛有分泌物", "expect_mode": "provisional", "conversation_id": "batch-fu-04"}
+{"id": "followup-05", "text": "狗腿瘸了", "expect_mode": "fast", "conversation_id": "batch-fu-05"}
+{"id": "normal-01", "text": "我家狗拉稀两天了，精神还行，食欲正常，没有呕吐，一天拉三次", "expect_mode": "normal", "conversation_id": "batch-nm-01"}
+{"id": "normal-02", "text": "我家猫眼睛分泌物多三天了，黄色粘稠，有点眯眼，精神食欲正常", "expect_mode": "normal", "conversation_id": "batch-nm-02"}
+{"id": "normal-03", "text": "狗三个月大，今天开始咳嗽，有痰音，精神食欲正常，疫苗已打完", "expect_mode": "normal", "conversation_id": "batch-nm-03"}
+{"id": "emergency-01", "text": "我家狗呼吸困难，舌头都紫了", "conversation_id": "batch-em-01"}
+{"id": "emergency-02", "text": "猫从五楼摔下来了，一动不动", "conversation_id": "batch-em-02"}
+{"id": "emergency-03", "text": "狗误食了大量巧克力，开始抽搐", "conversation_id": "batch-em-03"}
+{"id": "emergency-04", "text": "猫一天没尿了，一直蹲猫砂盆叫", "conversation_id": "batch-em-04"}
+{"id": "image-01", "text": "看看这只狗的腿怎么了", "image": "testdata/autodl/QQ20260807-172233.png", "conversation_id": "batch-img-01"}
+{"id": "image-02", "text": "这只狗的腿怎么处理", "image": "testdata/autodl/QQ20260807-172245.png", "conversation_id": "batch-img-02"}
+{"id": "image-03", "text": "", "image": "testdata/autodl/QQ20260807-172106.png", "conversation_id": "batch-img-03"}
+{"id": "edge-01", "text": "今天天气怎么样", "conversation_id": "batch-edge-01"}
+{"id": "edge-02", "text": "你好", "conversation_id": "batch-edge-02"}
+{"id": "edge-03", "text": "帮我写一段代码", "conversation_id": "batch-edge-03"}

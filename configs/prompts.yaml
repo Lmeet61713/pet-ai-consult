@@ -1,0 +1,26 @@
+# Prompt 版本清单（v6.3 §12.1：注册表元数据，代码中的 SPEC 为准）
+# 升级任一 Prompt 后：更新 version 并在回归集跑一遍
+
+- prompt_id: vision_observation
+  version: v1.0.0
+  purpose: 图片结构化观察（Qwen3.5-9B 经 VisionGateway）
+
+- prompt_id: consult_answer_first
+  version: v2.0.0
+  purpose: 回答优先问诊生成（KnowledgeConsult，结构化 JSON）
+
+- prompt_id: consult_urgent_guidance
+  version: v1.0.0
+  purpose: 高风险/急症指导模式生成
+
+- prompt_id: consult_provisional
+  version: v1.0.0
+  purpose: 信息不足初步回答生成
+
+- prompt_id: consult_rewrite
+  version: v1.0.0
+  purpose: 医疗安全检查失败后的安全重写
+
+- prompt_id: medical_review
+  version: v1.0.0
+  purpose: 医疗安全交叉复查（预留，第一版以规则为主）

@@ -1,0 +1,32 @@
+{
+ "version": "1.6.0-open-mvp-truth-repair-draft",
+ "generated_at": "2026-08-15",
+ "status": "PASS",
+ "counts": {
+  "knowledge_cards": 260,
+  "emergency_rules": 40,
+  "total_records": 300,
+  "sources": 116,
+  "repair_manifest_rows": 260,
+  "categories": 27
+ },
+ "checks": {
+  "duplicate_card_ids": 0,
+  "duplicate_emergency_rule_ids": 0,
+  "prohibited_or_noncommercial_source_references": 0,
+  "missing_evidence_or_locator": 0,
+  "unresolved_sources": 0,
+  "title_mismatch": 0,
+  "production_eligible_records": 0
+ },
+ "prohibited_source_ids": [],
+ "overused_sources": [],
+ "errors": [],
+ "warnings": [],
+ "limitations": [
+  "来源真实性、许可与商业条款和章节定位均基于自动化加工，未经人工逐条核对，未完成中国大陆执业兽医临床签审。",
+  "全部记录均为 test 级且 production_eligible=false。",
+  "约85%的种子问题是卡片标题与短语，属于回归测试，不代表真实用户检索召回率。",
+  "本版在 v1_5 基础上仅按对抗式复审意见修改知识卡字段，急症规则与来源沿用 v1_4/v1_5 内容。"
+ ]
+}

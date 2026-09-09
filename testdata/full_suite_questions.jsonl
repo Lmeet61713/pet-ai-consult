@@ -1,0 +1,31 @@
+{"id": "cq-01", "text": "我家狗拉稀两天了，精神还行，食欲正常，没有呕吐，一天拉三次", "conversation_id": "cq-01"}
+{"id": "cq-02", "text": "我家猫今天吐了白色泡沫，精神有点差，不太想吃东西", "conversation_id": "cq-02"}
+{"id": "cq-03", "text": "狗皮肤瘙痒掉毛，一直抓挠，后背有一块秃了", "conversation_id": "cq-03"}
+{"id": "cq-04", "text": "猫眼睛分泌物增多，黄绿色的，有点眯眼，精神食欲正常", "conversation_id": "cq-04"}
+{"id": "cq-05", "text": "狗耳朵臭，有褐色分泌物，一直甩头", "conversation_id": "cq-05"}
+{"id": "cq-06", "text": "猫最近不爱喝水，尿量变少，有点烦躁", "conversation_id": "cq-06"}
+{"id": "cq-07", "text": "狗打喷嚏流鼻涕三天了，精神还行，吃喝正常", "conversation_id": "cq-07"}
+{"id": "cq-08", "text": "两个月大的幼猫第一次驱虫应该怎么做", "conversation_id": "cq-08"}
+{"id": "cq-09", "text": "小狗的疫苗一般要打几针，什么时候打", "conversation_id": "cq-09"}
+{"id": "cq-10", "text": "猫做完绝育手术后需要注意什么", "conversation_id": "cq-10"}
+{"id": "cq-11", "text": "狗一般多久洗一次澡比较合适", "conversation_id": "cq-11"}
+{"id": "cq-12", "text": "猫吐毛球是正常的吗，需要怎么处理", "conversation_id": "cq-12"}
+{"id": "cq-13", "text": "狗嘴巴很臭是什么原因，怎么办", "conversation_id": "cq-13"}
+{"id": "cq-14", "text": "猫下巴有黑色颗粒，皮肤有结痂，掉毛", "conversation_id": "cq-14"}
+{"id": "cq-15", "text": "老年狗走路有点瘸，后腿没力气，怎么办", "conversation_id": "cq-15"}
+{"id": "fu-01a", "text": "狗拉稀怎么办", "conversation_id": "fu-01"}
+{"id": "fu-01b", "text": "拉稀两天了，精神还行，没有吐，就是一天好几次", "conversation_id": "fu-01"}
+{"id": "fu-02a", "text": "猫眼睛有分泌物", "conversation_id": "fu-02"}
+{"id": "fu-02b", "text": "右眼分泌物是黄色的，有点黏，三天了，精神食欲正常", "conversation_id": "fu-02"}
+{"id": "fu-03a", "text": "狗一直咳嗽", "conversation_id": "fu-03"}
+{"id": "fu-03b", "text": "咳嗽三天了，干咳为主，精神食欲正常，疫苗打完了", "conversation_id": "fu-03"}
+{"id": "fu-04a", "text": "猫呕吐了", "conversation_id": "fu-04"}
+{"id": "fu-04b", "text": "今天吐了两次，白色泡沫，精神还可以，家里有绿植", "conversation_id": "fu-04"}
+{"id": "fu-05a", "text": "狗不吃东西了", "conversation_id": "fu-05"}
+{"id": "fu-05b", "text": "两天没怎么吃东西，精神有点蔫，还拉过一次稀", "conversation_id": "fu-05"}
+{"id": "em-01", "text": "我家狗呼吸困难，舌头都紫了", "conversation_id": "em-01"}
+{"id": "em-02", "text": "狗误食了大量巧克力，开始抽搐", "conversation_id": "em-02"}
+{"id": "img-01", "text": "看看这只狗的腿怎么了", "image": "testdata/autodl/QQ20260807-172233.png", "conversation_id": "img-01"}
+{"id": "img-02", "text": "这只狗的前腿是怎么回事", "image": "testdata/autodl/QQ20260807-172245.png", "conversation_id": "img-02"}
+{"id": "ed-01", "text": "今天天气怎么样", "conversation_id": "ed-01"}
+{"id": "ed-02", "text": "帮我写一段Python代码", "conversation_id": "ed-02"}

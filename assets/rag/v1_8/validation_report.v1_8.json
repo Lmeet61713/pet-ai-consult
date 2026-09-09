@@ -1,0 +1,39 @@
+{
+  "version": "1.8.0-open-mvp-retrieval-and-safety-repair-draft",
+  "generated_at": "2026-08-17",
+  "status": "PASS_WITH_RELEASE_BLOCKERS",
+  "counts": {
+    "knowledge_cards": 319,
+    "emergency_rules": 40,
+    "total_records": 359,
+    "sources": 131,
+    "new_daily_life_cards": 16,
+    "removed_unsupported_cards": 1,
+    "categories": 27,
+    "benchmark_seed_queries": 957
+  },
+  "checks": {
+    "duplicate_card_ids": 0,
+    "duplicate_emergency_rule_ids": 0,
+    "missing_evidence_source_references": 0,
+    "non_enum_scope_records": 0,
+    "phrases_used_by_more_than_5_cards": 0,
+    "shared_phrase_unique_count": 43,
+    "production_eligible_records": 0,
+    "legacy_sources_pending_license_metadata_reverification": 41
+  },
+  "repairs": [
+    "将44张V1.7新增卡片的长段scope迁移至scope_note并恢复固定scope枚举。",
+    "将高频泛化短语限制为最多5张最相关卡片，并重建全部retrieval_text。",
+    "修复6张卡片中无尿等待12至48小时的危险表达，改为疑似无尿无需等待固定时长。",
+    "修复幼犬幼猫急症规则的物种字段。",
+    "替换猫乳腺肿块、猫便秘、犬便秘的弱相关或错主题来源。",
+    "移除仅由犬研究支撑的猫第三眼睑脱出卡片。"
+  ],
+  "limitations": [
+    "全部记录仍为test级，production_eligible=false，需中国大陆执业兽医逐条签审。",
+    "仍有部分V1.7遗留来源缺少结构化许可核验状态，已如实标为待复核，未伪造为已验证。",
+    "benchmark_seed仍由卡片标题和短语生成，只用于回归测试，不代表真实用户召回率。",
+    "新增16张卡片的来源许可和主题相关性已核对，但中文临床表述仍需执业兽医签审。"
+  ]
+}

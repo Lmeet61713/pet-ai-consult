@@ -1,0 +1,33 @@
+{
+ "version": "1.7.0-open-mvp-truth-repair-draft",
+ "generated_at": "2026-08-15",
+ "status": "PASS",
+ "counts": {
+  "knowledge_cards": 304,
+  "emergency_rules": 40,
+  "total_records": 344,
+  "sources": 116,
+  "repair_manifest_rows": 304,
+  "categories": 27
+ },
+ "checks": {
+  "duplicate_card_ids": 0,
+  "duplicate_emergency_rule_ids": 0,
+  "prohibited_or_noncommercial_source_references": 0,
+  "missing_evidence_or_locator": 0,
+  "unresolved_sources": 0,
+  "title_mismatch": 0,
+  "production_eligible_records": 0
+ },
+ "prohibited_source_ids": [],
+ "overused_sources": [],
+ "errors": [],
+ "warnings": [],
+ "limitations": [
+  "来源真实性、许可与商业条款和章节定位均基于自动化加工，未经人工逐条核对，未完成中国大陆执业兽医临床签审。",
+  "全部记录均为 test 级且 production_eligible=false。",
+  "约85%的种子问题是卡片标题与短语，属于回归测试，不代表真实用户检索召回率。",
+  "本版在 v1_6 基础上做短语扩面并新增55张高频主诉卡片；急症规则与来源沿用 v1_4/v1_5 内容。",
+  "部分新卡来源与主题仅部分相关（如犬便秘引用膀胱肠道管理文献），物种与主题相符性需执业兽医复核。"
+ ]
+}
