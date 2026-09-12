@@ -17,6 +17,21 @@
 任一校验失败都会把错误码收集到 RagAssetReport.errors；errors 非空时
 report.ready 为 False，检索器直接返回 UNAVAILABLE，绝不带病提供知识。
 
+【校验失败的传播路径（可用性设计）】
+    loader.errors
+      → report.ready = False
+      → 检索器返回 UNAVAILABLE，reason_codes = 错误码
+      → ConsultAgent 标记 knowledge_consult 降级，不注入知识库增强，
+         但**仍然继续完成问诊**（走无知识库的生成/追问路径）。
+即：知识库是增强项而非必需项，不能成为单点故障。
+因此本模块一律“收集错误、不抛异常”——抛异常会阻断服务启动。
+
+【错误码命名规范（便于日志检索与聚合）】
+- 文件/解析层：<对象>_file_missing / invalid_<对象>_json / invalid_<对象>_type
+- 单条记录层：<问题>:<记录ID>[:<字段>]（冒号分隔，便于按卡片聚合错误）
+- 前缀即性质：missing_ / invalid_ / duplicate_ / unresolved_ / mismatch /
+  disallowed_ / non_test / production_eligible
+
 【支持的资产格式】
 - v1_1：早期 enriched JSONL 格式（facts + evidence_refs 结构）
 - v1_4 ~ v1_8：combined 格式（source_supported_simple_facts + evidence），
@@ -98,27 +113,45 @@ class RagAssetLoader:
 
         任何步骤的错误都累积进 errors，不抛异常（保证服务可启动，
         检索侧通过 report.ready 决定是否可用）。
+
+        【步骤编号与下方代码的对应关系】
+        ① 空路径早退 → ② 识别格式/定位文件 → ③ 目录校验和（仅 v1.4+）
+        → ④ 读卡片 → ⑤ 读来源清单 → ⑥ 读审核队列哈希
+        → ⑦ 逐卡校验 + 归一化 → ⑧ v1.1 额外溯源校验 → ⑨ 读版本号。
+        注意 ⑦ 的顺序：先校验（出错只记码）再归一化（无副作用），
+        因此即使卡片不合法也会被归一化并放进 report.cards，
+        调用方必须用 report.ready 而不是 cards 非空来判断资产可用。
         """
+        # ① 未配置资产路径（如本地开发未设环境变量）：直接返回，不给卡片
         if self.asset_path is None:
             return RagAssetReport((), frozenset(), "unconfigured", ("asset_path_missing",))
 
+        # ② 支持“目录”与“单个 JSONL 文件”两种入参，统一解析出根目录/卡片文件/格式
         root, cards_path, asset_format = self._resolve_paths(self.asset_path)
         if cards_path is None or not cards_path.is_file():
+            # 没有可读的卡片文件就没有任何可检索内容 → 立即返回（不做后续无意义校验）
             return RagAssetReport(
                 (), frozenset(), "unavailable", ("cards_file_missing",), asset_format
             )
 
         errors: list[str] = []
         if asset_format in self._V14_LIKE:
+            # ③ v1.4+ 资产随包提供 SHA256SUMS：先验整个目录，
+            #    这样“文件被篡改/半包上传”能在读卡片前就被发现
             self._validate_checksums(root, errors)
 
+        # ④ 读卡片（坏行只记错误并跳过，不影响其余卡片）
         raw_cards = self._read_cards(cards_path, errors)
+        # ⑤ 读来源清单：得到合法 source_id 集合，供后面 evidence 溯源校验
         source_ids = self._load_source_ids(root, asset_format, errors)
+        # ⑥ 读兽医审核队列登记哈希（送审基线）；v1.1 无此机制故为空字典
         review_hashes = (
             read_review_queue(root, asset_format) if asset_format in self._V14_LIKE else {}
         )
         cards: list[dict[str, Any]] = []
         for line_number, raw_card in raw_cards:
+            # ⑦ 两套格式走各自的校验器；校验与归一化分离，
+            #    保证归一化函数（_normalize_*）永远是纯函数、无校验职责
             if asset_format in self._V14_LIKE:
                 self._validate_v14_card(
                     raw_card, line_number, source_ids, review_hashes, errors
@@ -129,6 +162,8 @@ class RagAssetLoader:
                 cards.append(raw_card)
 
         if asset_format == "v1_1":
+            # ⑧ v1.1 独有：evidence_refs 的 source_id 必须在来源清单中可解析。
+            #    （v1.4+ 在 _validate_v14_card 里逐卡同步做过了）
             for card in cards:
                 for fact in card.get("facts", []):
                     for ref in fact.get("evidence_refs", []):
@@ -136,11 +171,13 @@ class RagAssetLoader:
                         if source_id not in source_ids:
                             errors.append(f"unresolved_source:{card.get('id')}:{source_id}")
 
+        # ⑨ 读版本号：写入 RagResult.index_version，线上定位资产版本的唯一依据
         version = self._read_index_version(root, cards, asset_format)
         return RagAssetReport(
             tuple(cards),
             frozenset(source_ids),
             version,
+            # 保序去重：同一错误可能在多卡上重复出现，报告里只需保留一条
             tuple(dict.fromkeys(errors)),
             asset_format,
         )
@@ -157,6 +194,8 @@ class RagAssetLoader:
 
         :return: (资产根目录, 卡片文件路径或 None, 格式标识)
         """
+        # 情形 A：入参直接指向文件 —— 用文件名反推格式（无法识别时按 v1_1 处理，
+        # 因为 v1_1 不依赖 SHA256SUMS/审核队列，兜底最安全）
         if path.is_file():
             for fmt, name in (("v1_4", cls._V14_CARDS), ("v1_5", cls._V15_CARDS),
                               ("v1_6", cls._V16_CARDS), ("v1_7", cls._V17_CARDS),
@@ -164,6 +203,9 @@ class RagAssetLoader:
                 if path.name == name:
                     return path.parent, path, fmt
             return path.parent, path, "v1_1"
+        # 情形 B：入参为目录 —— 按 v1_4 → v1_8 的固定顺序探测，先命中先返回。
+        # 注意顺序是从小到大：若同一目录里同时存在多个版本的卡片文件，
+        # 选中的会是序号最小的那个（正常部署中每个版本各自独立目录，不会混放）。
         for fmt, name in (("v1_4", cls._V14_CARDS), ("v1_5", cls._V15_CARDS),
                           ("v1_6", cls._V16_CARDS), ("v1_7", cls._V17_CARDS),
                           ("v1_8", cls._V18_CARDS)):
@@ -173,6 +215,8 @@ class RagAssetLoader:
         v11 = path / cls._V11_CARDS
         if v11.is_file():
             return path, v11, "v1_1"
+        # 都不存在：返回 None 让 load() 报 cards_file_missing，
+        # 而不是返回一个“看似可用的空资产”（后者会静默检索不到任何东西）
         return path, None, "unknown"
 
     @staticmethod
@@ -188,15 +232,19 @@ class RagAssetLoader:
         :return: (行号, 卡片字典) 列表
         """
         cards: list[tuple[int, dict[str, Any]]] = []
+        # 行号从 1 开始：与编辑器/日志里的行号一致，便于定位坏行
         for line_number, line in enumerate(cards_path.read_text(encoding="utf-8").splitlines(), 1):
             if not line.strip():
+                # 文件尾部的空行很常见，不算错误
                 continue
             try:
                 card = json.loads(line)
             except json.JSONDecodeError:
+                # 单行损坏不放弃整个文件：记录行号后继续读下一行
                 errors.append(f"invalid_json_line:{line_number}")
                 continue
             if not isinstance(card, dict):
+                # JSONL 里混入数组/字符串（多为合并文件的意外产物）
                 errors.append(f"invalid_card_type:{line_number}")
                 continue
             cards.append((line_number, card))
@@ -213,13 +261,17 @@ class RagAssetLoader:
         - non_test_record / production_eligible_record：发布闸门未关闭
         - invalid_content_hash / content_hash_mismatch：哈希缺失或与内容不符
         """
+        # 无 id 时用行号作临时标识，否则错误码会全部变成 missing:None 无法归因
         card_id = card.get("id", f"line_{line_number}")
         required = ("id", "title", "species", "category", "facts", "retrieval_text")
         for field in required:
+            # 用 not card.get(field)：空字符串/空列表同样判为缺失
+            # （检索器把 retrieval_text 等当文本用，空值会让卡片永远检索不到）
             if not card.get(field):
                 errors.append(f"missing_field:{card_id}:{field}")
         _validate_closed_release_gate(card, card_id, errors)
         digest = card.get("content_hash")
+        # 先验格式（64 位十六进制）再验值：便于区分“资产未写入哈希”与“内容被改”
         if not isinstance(digest, str) or len(digest) != 64:
             errors.append(f"invalid_content_hash:{card_id}")
         elif digest != _v11_content_hash(card):
@@ -244,6 +296,8 @@ class RagAssetLoader:
           page_or_section 定位信息（证据可溯源到具体页码/章节）。
         """
         card_id = card.get("id", f"line_{line_number}")
+        # v1.4+ 把事实与证据拆成两组字段：事实是给用户看的，
+        # evidence 是溯源用的（两份都要有，缺一不可）
         required = (
             "id",
             "title",
@@ -258,6 +312,8 @@ class RagAssetLoader:
                 errors.append(f"missing_field:{card_id}:{field}")
         _validate_closed_release_gate(card, card_id, errors)
         review = card.get("veterinary_review") or {}
+        # 必须是 pending：一旦状态被改成 approved 就说明该卡已进入发布流程，
+        # 不应再由测试层加载器使用（发布走另一条链路）
         if review.get("status") != "pending":
             errors.append(f"unexpected_review_status:{card_id}")
         digest = card.get("content_hash")
@@ -265,12 +321,17 @@ class RagAssetLoader:
             errors.append(f"invalid_content_hash:{card_id}")
         elif digest != _v14_content_hash(card):
             errors.append(f"content_hash_mismatch:{card_id}")
+        # 双重哈希比对（与 v1.1 的关键区别）：
+        #   上一条验“文件内自洽”，这一条验“文件 == 送审版”。
+        # 只有两条都通过，才能证明线上加载的内容就是兽医审核过的那一份。
         if review_hashes.get(str(card_id)) != digest:
             errors.append(f"review_hash_mismatch:{card_id}")
         for evidence in card.get("evidence", []):
             source_id = evidence.get("source_id")
             if source_id not in source_ids:
                 errors.append(f"unresolved_source:{card_id}:{source_id}")
+            # 定位信息必需：只有 source_id 无法回答“这个事实在来源的哪一页”，
+            # 而兽医复审时需要逐条回查原文
             if not evidence.get("page_or_section"):
                 errors.append(f"missing_locator:{card_id}:{source_id}")
 
@@ -295,6 +356,7 @@ class RagAssetLoader:
         }.get(asset_format, "sources.enriched.json")
         path = root / name
         if not path.is_file():
+            # 与卡片文件不同：缺来源清单是错误但可继续（后续溯源校验会全部报错）
             errors.append("sources_file_missing")
             return set()
         try:
@@ -312,8 +374,12 @@ class RagAssetLoader:
                 errors.append("source_id_missing")
                 continue
             if source_id in source_ids:
+                # 重复 ID 会让卡片溯源指向不确定的来源，必须报错
                 errors.append(f"duplicate_source:{source_id}")
             source_ids.add(source_id)
+            # 版权闸门（仅 v1.4~v1.7）：v1.8 起资产策略变更，不再检查此项。
+            # 三项任一不满足即拒绝：显式允许商用 / 许可证不得含 NC / 不得含 ND。
+            # 注意 license 先 upper() 再判断，兼容 “CC BY-NC” 与 “cc-by-nc” 等写法。
             if asset_format in ("v1_4", "v1_5", "v1_6", "v1_7") and (
                 source.get("commercial_use_allowed") is not True
                 or "NC" in str(source.get("license", "")).upper()
@@ -344,11 +410,14 @@ class RagAssetLoader:
         if report_path.is_file():
             try:
                 report = json.loads(report_path.read_text(encoding="utf-8"))
+                # 先取 version 再退回 schema_version：老资产只有后者
                 return str(report.get("version") or report.get("schema_version") or "unknown")
             except json.JSONDecodeError:
+                # 报告损坏不阻断加载：版本号仅用于观测，失败就标记为 invalid
                 return "invalid"
         if not cards:
             return "empty"
+        # 无报告文件时的退路：用第一张卡片自声明的版本号
         return str(cards[0].get("version") or cards[0].get("schema_version") or "unknown")
 
     @staticmethod
@@ -369,20 +438,29 @@ class RagAssetLoader:
         for line in sums_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
+            # maxsplit=1：文件名里可能含空格，只切第一段作为哈希
             parts = line.split(maxsplit=1)
             if len(parts) != 2:
                 errors.append("invalid_checksum_line")
                 continue
             expected, filename = parts
+            # lstrip("*")：兼容 sha256sum 在二进制模式输出时给文件名加的 * 前缀
             file_path = root / filename.lstrip("*")
             if not file_path.is_file():
+                # 清单里有但文件不在：半包上传/漏拷文件
                 errors.append(f"checksum_file_missing:{filename}")
             elif asset_file_digest(file_path) != expected.lower():
+                # 两侧统一小写比较（sha256sum 输出小写，人工编辑可能写大写）
                 errors.append(f"checksum_mismatch:{filename}")
 
 
 def asset_file_digest(path: Path) -> str:
-    """计算文件的 SHA-256 十六进制摘要（用于 SHA256SUMS 完整性校验）。"""
+    """计算文件的 SHA-256 十六进制摘要（用于 SHA256SUMS 完整性校验）。
+
+    注意与 _v14_content_hash 的区别：
+    本函数算的是“字节级文件哈希”（验传输/存储完整性），
+    后者算的是“字段级语义哈希”（验内容是否被编辑）。
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -394,11 +472,20 @@ def read_review_queue(root: Path, asset_format: str = "v1_4") -> dict[str, str]:
     文件不存在时返回空字典（不视为错误，由调用方决定后续校验）。
 
     注意：v1_8 队列文件名沿用 combined_ 前缀（veterinary_review_queue.combined_v1_8.csv）。
+
+    【为什么文件缺失不算错误】
+    队列是“送审流程的产物”，而不是运行必需资产：
+    缺失时返回空字典，_validate_v14_card 会因 review_hashes.get() 为 None
+    而在每张卡上报 review_hash_mismatch，从而进入 ready=False，
+    最终效果与报错一致，但失败原因更具体（能看出是哈希对不上而非文件不存在）。
     """
     path = root / f"veterinary_review_queue.combined_{asset_format}.csv"
     if not path.is_file():
         return {}
+    # newline=""：交给 csv 模块处理换行，避免 CRLF 行尾的残留回车符混入字段值
     with path.open(encoding="utf-8", newline="") as handle:
+        # 当前实现假定 CSV 含 id / content_hash 两列；
+        # 缺列会抛 KeyError（属于资产格式错误，直接暴露比静默更好）
         return {row["id"]: row["content_hash"] for row in csv.DictReader(handle)}
 
 
@@ -412,8 +499,11 @@ def _validate_closed_release_gate(
 
     这是防止未经审核的知识卡片误入生产链路的最后一道静态防线。
     """
+    # 用 “!=” 而非 “not in”：空值/拼写错误（如 "test "带空格）都算闸门未关闭
     if record.get("index_tier") != "test":
         errors.append(f"non_test_record:{record_id}")
+    # is not False：必须显式为布尔 False；缺字段（None）也算未关闭闸门，
+    # 避免“没写这个字段”被当作“未发布”而放行
     if record.get("production_eligible") is not False:
         errors.append(f"production_eligible_record:{record_id}")
 
@@ -430,8 +520,21 @@ def _normalize_v14_card(card: dict[str, Any]) -> dict[str, Any]:
     - veterinary_review → review 字段。
 
     归一化后检索器无需区分 v1.1 与 v1.4+ 格式。
+
+    【为什么用 dict(card) 浅拷贝而不是改原字典】
+    原始卡片对象仍会被上层引用（如需导出/对比），原地修改会造成“送审内容”
+    与内存中对象不一致的错觉；归一化只应产生新视图。
+
+    【为什么每个 fact 都共享同一份 evidence_refs 对象】
+    combined 资产的证据是卡片级的（一组 evidence 支撑整卡所有事实），
+    因此每个 fact 引用同一列表。下游只读，不存在互相污染风险。
+
+    【mapping_status 为何写死】
+    归一化产物不能被当成“已核验”；写死该字符串保证任何下游
+    都不会把它误认为已完成兽医核验（核验状态以 veterinary_review 为准）。
     """
     normalized = dict(card)
+    # 先抽取出对下游有用的三个字段，丢弃其余审核元数据（不进 prompt）
     evidence_refs = [
         {
             "source_id": evidence.get("source_id"),
@@ -440,6 +543,8 @@ def _normalize_v14_card(card: dict[str, Any]) -> dict[str, Any]:
         }
         for evidence in card.get("evidence", [])
     ]
+    # enumerate(..., 1)：事实编号从 1 开始（与人工阅读习惯一致），
+    # 且 ID 稳定（同一个卡片同一条事实永远得到相同 ID），可直接用于评估对齐
     normalized["facts"] = [
         {
             "id": f"{card['id']}:fact-{index}",
@@ -449,7 +554,9 @@ def _normalize_v14_card(card: dict[str, Any]) -> dict[str, Any]:
         }
         for index, text in enumerate(card.get("source_supported_simple_facts", []), 1)
     ]
+    # 单值字段转列表：检索器/生成侧统一按列表处理，避免两套分支
     normalized["safe_next_steps"] = [card["safe_next_step"]] if card.get("safe_next_step") else []
+    # 审核字段改名：v1.4+ 叫 veterinary_review，v1.1 叫 review
     normalized["review"] = card.get("veterinary_review", {})
     return normalized
 
@@ -459,6 +566,14 @@ def _v14_content_hash(record: dict[str, Any]) -> str:
     紧凑 JSON 序列化（不排序键，保持资产产出顺序）后取 SHA-256。
 
     用于检测卡片/急症规则文件在送审后是否被改动。
+
+    【为什么与 emergency_shadow._content_hash 完全一样】
+    两者必须同算法，否则同一份规则在“卡片校验”与“急症校验”两处
+    会算出不同哈希而互相矛盾。修改任一处都必须同步另一处。
+
+    【为什么 serialize 不排序键、而 v1.1 排序】
+    v1.4+ 的哈希基线由生产流程生成并登记在审核队列中，
+    算法必须与“生成方”逐字节一致，因此只能完全照抄当时的行为（不排序）。
     """
     payload = {key: value for key, value in record.items() if key != "content_hash"}
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -471,6 +586,14 @@ def _v11_content_hash(card: dict[str, Any]) -> str:
 
     固定 core_fields 白名单保证：非业务字段（如审核备注）变化不会导致
     哈希不匹配，而任何业务内容改动都能被检出。
+
+    【与 v1.4 哈希策略的差异及原因】
+    v1.1 是早期资产，没有“送审基线哈希”可对齐，因此可以选择更稳健的
+    白名单 + 排序方案：把审核元数据（如 review 备注、时间戳）排除在外，
+    避免“只改了备注就报哈希不符”的伪阳性。
+
+    注意：core_fields 必须与资产产出方保持一致；新增业务字段时
+    若不同步加进白名单，该字段的改动将无法被哈希检出。
     """
     core_fields = (
         "id",

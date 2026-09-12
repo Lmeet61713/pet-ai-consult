@@ -22,8 +22,20 @@
 - hybrid_retriever.py：HybridRetriever 词面(0.7)+BGE-M3 向量(0.3)混合检索，
   模型不可用时自动回退纯词面
 - emergency_shadow.py：V14EmergencyShadowMatcher 急症规则影子匹配器
+
+【导入约定（为什么这里只导出契约）】
+__all__ 仅包含 models.py 的三个契约类型，是刻意为之：
+① 本包被 app/agent 等模块在启动时导入，若在此处 import 检索器，会把
+   loader（含 JSON/CSV/哈希校验）乃至 FlagEmbedding/torch 一并拖进启动
+   路径（hybrid_retriever 虽然延迟导入，但签名/常量仍会被加载）；
+② 检索器必须显式从子模块导入（app.rag.retriever / app.rag.hybrid_retriever），
+   让“用了哪个检索器”在代码里可见，也便于测试时替换实现；
+③ 契约模块零依赖，单独导出不会形成 app.rag 内部的循环导入。
+新增导出项前，先确认它不会把重依赖带进启动路径。
 """
 
 from app.rag.models import RagDecisionStatus, RagHit, RagResult
 
+# 对外契约白名单：上层 `from app.rag import RagResult` 即可拿到，
+# 不触发任何检索实现与本包子模块的导入副作用。
 __all__ = ["RagDecisionStatus", "RagHit", "RagResult"]
