@@ -1,0 +1,7 @@
+{
+  "provider": "deepseek_official",
+  "base_url_hash": "a34e2a4708ed1c61",
+  "schema_version": "deepseek-official-v1",
+  "verified_at": "2026-08-08T11:57:51.596078+08:00",
+  "config_hash": "1df467354711ee2a5a60a9618c3dcfb157ac6558b34bf0250ae113e880a3edf1"
+}

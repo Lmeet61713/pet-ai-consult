@@ -358,9 +358,13 @@ class ConsultAgent:
         # 步骤 2：推断物种（用户未明确物种时，从文字/历史推断）
         self._apply_inferred_species(state)
         # 步骤 3：创建 deadline 预算（总超时控制）
+        # 根据命令中配置的总超时秒数，计算一个绝对超时时间点
+        # 后续所有阶段都从这个总预算中分配子预算，防止某个阶段超时导致整个请求挂起
         deadline = self.deadline_factory.after_seconds(command.total_timeout_seconds)
         _run_t0 = __import__("time").monotonic()
 
+        # 步骤 4：RAG 急症影子匹配（仅记录日志，不影响实际决策）
+        # 用于验证新急症规则的准确率，结果写入日志供开发者分析
         if self.rag_emergency_matcher is not None:
             try:
                 emergency_shadow = self.rag_emergency_matcher.search(
@@ -376,19 +380,23 @@ class ConsultAgent:
                     },
                 )
             except Exception:  # noqa: BLE001 - Shadow must not affect live triage
+                # 影子匹配失败不影响主流程，仅记录警告
                 logger.warning(
                     "rag_emergency_shadow_failed",
                     extra={"request_id": state.request_id},
                     exc_info=True,
                 )
 
-        # V1.1 P0-2：文字急症预判在一切模型依赖之前执行。
-        # 无幂等键时直接固定返回；带幂等键时保留幂等冲突检查。
+        # 步骤 5：文字急症预判（纯规则，不调外部服务）
+        # 在一切模型依赖之前执行，确保急症场景下不依赖模型可用性
+        # 无幂等键时直接固定返回；带幂等键时保留幂等冲突检查
         state.text_emergency_precheck = self.emergency_rules.precheck_text(
             text=state.text, pet_info=state.pet_info
         )
         precheck_emergency = state.text_emergency_precheck.level == RiskLevel.EMERGENCY
+        # 
         if precheck_emergency and not command.idempotency_key:
+            # 急症且无幂等键 → 直接返回固定急症模板，不走后续流程
             urgent = self._fixed_urgent_response(state)
             await _emit_progress(
                 progress,
@@ -398,8 +406,12 @@ class ConsultAgent:
             )
             return urgent
 
+        # 步骤 6：幂等性检查（防止重复请求）
+        # 基于请求内容计算唯一指纹，相同内容返回缓存结果
+        # todo:防止用户不小心点了两次提交，或者网络超时不重复处理，直接返回第一次结果。
         owner = state.request_id
         request_hash = self._idempotency_fingerprint(command)
+        # 哈希指纹
         idempotency_claimed = False
         if command.idempotency_key:
             try:
@@ -407,6 +419,7 @@ class ConsultAgent:
                     command, owner, request_hash, deadline
                 )
                 if cached is not None:
+                    # 缓存命中 → 直接返回缓存结果
                     return cached
                 idempotency_claimed = True
             except RedisUnavailable as exc:
@@ -414,17 +427,22 @@ class ConsultAgent:
                 state.degraded_services.append("redis")
                 state.warnings.append(str(exc))
 
+        # 步骤 7：会话锁获取（防止同一会话并发请求）
+        # 构建 Redis 会话键，用于锁管理和历史存储
         key = self.conversation_service.key(
             state.tenant_id, state.user_id, state.conversation_id
         )
         lock_held = False
         try:
+            # 急症请求跳过锁获取，直接返回固定模板
             if not precheck_emergency:
                 try:
+                    # 尝试获取会话锁（防止并发请求）
                     lock_held = await self.conversation_service.acquire_lock(
                         key, owner_token=owner
                     )
                     if not lock_held:
+                        # 锁被占用 → 等待锁释放
                         lock_wait_started = __import__("time").monotonic()
                         logger.info(
                             "conversation_lock_wait_started",
@@ -444,6 +462,7 @@ class ConsultAgent:
                             },
                         )
                 except ConversationConflictError:
+                    # 等待锁超时 → 抛出冲突异常
                     logger.warning(
                         "conversation_lock_timeout",
                         extra={
@@ -458,8 +477,10 @@ class ConsultAgent:
                     state.warnings.append(str(exc))
                     lock_held = False
 
+            # 步骤 8：执行主流程（_execute）
             try:
                 if precheck_emergency:
+                    # 急症 → 直接返回固定模板
                     response = self._fixed_urgent_response(state)
                     await _emit_progress(
                         progress,
@@ -469,6 +490,7 @@ class ConsultAgent:
                     )
                 else:
                     # V1.1 P0-3：外层硬兜底，总请求不超绝对 deadline
+                    # 使用 asyncio.wait_for 确保总超时控制
                     response = await asyncio.wait_for(
                         self._execute(
                             state, key, deadline,
@@ -479,6 +501,7 @@ class ConsultAgent:
             except asyncio.TimeoutError:
                 raise RequestDeadlineExceeded("处理超时，请稍后重试") from None
             finally:
+                # 释放会话锁（TTL 兜底自动过期）
                 if lock_held:
                     try:
                         await self.conversation_service.release_lock(
@@ -486,7 +509,9 @@ class ConsultAgent:
                         )
                     except RedisUnavailable:
                         pass  # TTL 兜底自动过期
+        # 步骤 9：异常处理（超时/冲突/服务异常 → 急症优先返回固定模板）
         except ConversationConflictError as exc:
+            # 会话冲突（并发请求）→ 返回错误响应
             logger.warning(
                 "conversation_conflict",
                 extra={"request_id": state.request_id, "reason": str(exc)[:120]},
@@ -495,6 +520,7 @@ class ConsultAgent:
                 state, "CONVERSATION_CONFLICT", "会话正在处理中，请稍后重试", retryable=True
             )
         except RequestDeadlineExceeded:
+            # 总超时 → 急症返回固定模板，否则返回错误
             if self._precheck_urgent(state):
                 response = self._fixed_urgent_response(state)
             else:
@@ -503,6 +529,7 @@ class ConsultAgent:
                     retryable=True,
                 )
         except ExternalServiceTimeout as exc:
+            # 外部服务超时（Vision/RAG/生成模型等）
             logger.warning("外部服务超时: %s", exc)
             if self._precheck_urgent(state):
                 response = self._fixed_urgent_response(state)
@@ -511,6 +538,7 @@ class ConsultAgent:
                     state, exc.code, str(exc), retryable=True
                 )
         except Exception:  # noqa: BLE001 - 兜底：命中急症仍给固定模板
+            # 未预期异常 → 急症优先返回固定模板
             logger.exception("consult_unhandled_error", extra={"request_id": state.request_id})
             if self._precheck_urgent(state):
                 response = self._fixed_urgent_response(state)
@@ -519,6 +547,7 @@ class ConsultAgent:
                     state, "INTERNAL_ERROR", "服务内部错误，请稍后重试", retryable=True
                 )
 
+        # 步骤 10：缓存结果（幂等键 + 可缓存状态）
         if command.idempotency_key and idempotency_claimed:
             if self._cacheable_status(response):
                 try:
@@ -528,6 +557,7 @@ class ConsultAgent:
                         response.model_dump_json(),
                     )
                 except RedisUnavailable:
+                    # 缓存失败 → 释放占位，允许其他请求重新执行
                     await self.idempotency_repo.release_claim(
                         state.tenant_id, state.user_id, command.idempotency_key,
                         request_hash, owner,
@@ -538,6 +568,7 @@ class ConsultAgent:
                     state.tenant_id, state.user_id, command.idempotency_key,
                     request_hash, owner,
                 )
+        # 步骤 11：对话存档（JSONL + PG 双写）
         total_ms = round((__import__("time").monotonic() - _run_t0) * 1000)
         await self._archive_dialogue(state, response, total_ms=total_ms)
         return response
@@ -548,8 +579,8 @@ class ConsultAgent:
 
     async def _execute(
         self,
-        state: ConsultState,
-        key,
+        state: ConsultState,    # 状态总线（读写中间结果）
+        key: str,        # 会话键（Redis 键名）
         deadline,
         *,
         progress: ProgressCallback | None = None,
@@ -585,26 +616,30 @@ class ConsultAgent:
         :return: ConsultResponse
         """
         import time as _time
-        _t0 = _time.monotonic()
-        rid = state.request_id
-        has_img = bool(state.image_inputs)
+        _t0 = _time.monotonic()     # 开始时间
+        rid = state.request_id     # 请求 ID
+        has_img = bool(state.image_inputs)     # 是否有图片
+        
         # 全链路步骤耗时采集（2026-08-20）：挂到 state 引用，各 return 路径自动可见，
         # _archive_dialogue 写入 dialogue JSONL 供监控"中间经过哪些步骤"
+        # 用于性能分析和问题排查
         steps: list[dict] = []
         state._steps = steps
-        # 1. 文字急症预判（最前置，纯规则；v6.3 §4 步骤 3）
-        #    run() 入口已执行（V1.1 P0-2）；此处仅兜底 _execute 被单独调用
+        
+        # 阶段 1：文字急症预判（最前置，纯规则；v6.3 §4 步骤 3）
+        # run() 入口已执行（V1.1 P0-2）；此处仅兜底 _execute 被单独调用
         if state.text_emergency_precheck is None:
             state.text_emergency_precheck = self.emergency_rules.precheck_text(
                 text=state.text, pet_info=state.pet_info
             )
 
-        # 2. 加载历史（Redis 不可用 → 无记忆单轮降级，v6.3 §28）
+        # 阶段 2：加载历史（Redis 不可用 → 无记忆单轮降级，v6.3 §28）
         try:
             snapshot = await self.conversation_service.load_context(key)
             state.history = snapshot.turns
             state.history_summary = snapshot.summary
         except RedisUnavailable as exc:
+            # Redis 不可用 → 降级为无历史单轮对话
             state.degraded_services.append("redis")
             state.warnings.append(str(exc))
 
@@ -667,7 +702,9 @@ class ConsultAgent:
             await self._save_turn(state, key, response)
             return response
 
-        # 4. 图片解析（经 VisionGateway；V1.1 P0-3：阶段共享预算 15s）
+        # 阶段 5：图片解析（经 VisionGateway；V1.1 P0-3：阶段共享预算 15s）
+        # 使用视觉模型分析图片，提取宠物症状信息
+        # 失败不阻断问诊，只在回答中标注 degraded
         if state.image_inputs:
             await _emit_progress(
                 progress,
@@ -743,12 +780,13 @@ class ConsultAgent:
             # 只有图片且图片服务不可用时没有可供生成的事实，禁止调用模型猜测。
             return await self._review(state, key, reason="image_unavailable")
 
-        # 4.5 图片观察异常检测（v1.2 §4.6：图文物种冲突 / 无宠物）
+        # 阶段 5.5：图片异常检测（v1.2 §4.6：图文物种冲突 / 无宠物）
+        # 检查图片中是否有宠物，以及图片物种是否与文字描述一致
         species_conflict = self._detect_species_conflict(state)
         no_pet = self._detect_no_pet(state)
 
-        # 5. RAG 检索提前到完整度判断之前（v1.2 §4.9：一次检索同时完成
-        #    意图判断 + 追问查缺 + grounded 证据）
+        # 阶段 6：RAG 检索（意图判断 + 追问查缺 + grounded 证据）
+        # 一次检索同时完成多个任务：判断意图、生成追问、提取证据
         rag_questions: list[str] = []
         _trg = _time.monotonic()
         if self.rag_retriever is not None:
@@ -788,7 +826,8 @@ class ConsultAgent:
                 logger.warning("rag_failed", extra={"request_id": rid}, exc_info=True)
         steps.append({"stage": "rag", "ms": round((_time.monotonic() - _trg) * 1000), "hits": len(state.rag_result.hits) if state.rag_result else 0})
 
-        # 5.1 完整度判断（带卡片追问查缺；不阻断回答，只决定 provisional）
+        # 阶段 7：完整度判断（带卡片追问查缺；不阻断回答，只决定 provisional）
+        # 评估用户提供的信息是否充足，生成追问问题
         state.completeness = self.completeness_checker.evaluate(
             state, rag_questions=rag_questions
         )
@@ -825,7 +864,8 @@ class ConsultAgent:
             state.warnings.append("图片中未识别到宠物，已按文字描述回答")
             state.vision_findings = []
 
-        # 6. 最终风险分级（合并文字预判 + 图片红旗 + 档案）
+        # 阶段 8：最终风险分级（合并文字预判 + 图片红旗 + 档案）
+        # 综合所有信息评估风险等级：EMERGENCY/HIGH/MEDIUM/LOW
         state.emergency_result = self.emergency_rules.evaluate(
             text=self._combined_user_text(state),
             red_flags=[f for f in state.vision_findings for f in f.red_flags],
@@ -878,15 +918,21 @@ class ConsultAgent:
             logger.info("pipeline_end", extra={"request_id": rid, "status": "success", "answer_mode": resp.answer_mode.value, "risk_level": state.risk_result.level.value, "total_ms": round((_time.monotonic() - _t0) * 1000), "answer_len": len(resp.answer or ""), "pet_ambiguous": True})
             return resp
 
-        # 7. 生成（三模式；EMERGENCY 已在上方固定短路）
+        # 阶段 9：生成回答（三模式；EMERGENCY 已在上方固定短路）
+        # 根据风险等级和信息完整度选择不同的生成模式：
+        # - normal：正常问诊（信息充足，低风险）
+        # - provisional：初步建议（信息不足，需要追问）
+        # - urgent_guidance：紧急指导（高风险）
         _tg = _time.monotonic()
         try:
             if token_sink is not None:
+                # 流式模式：逐 token 生成，实时推送
                 mode = await self._generate_streamed(
                     state, deadline, token_sink,
                     request_id=rid,
                 )
             elif state.risk_result.level == RiskLevel.HIGH:
+                # 高风险模式：生成紧急指导（不短路，仍走生成流程）
                 state.generated = await self.consultation_service.generate_urgent_guidance(
                     state, deadline=deadline.child(cap=20.0)
                 )
@@ -895,12 +941,13 @@ class ConsultAgent:
                 state.completeness.need_more_info
                 and state.completeness.reason in ("hard_need", "keyword_thin")
             ):
-                # 硬性缺失或短症状信息不足：先给简短初步建议，再提出关键追问。
+                # 硬性缺失或短症状信息不足：先给简短初步建议，再提出关键追问
                 state.generated = await self.consultation_service.generate_provisional(
                     state, deadline=deadline.child(cap=20.0)
                 )
                 mode = "provisional"
             else:
+                # 正常模式：信息充足，生成完整回答
                 state.generated = await self.consultation_service.generate(
                     state, deadline=deadline.child(cap=20.0)
                 )
@@ -909,6 +956,7 @@ class ConsultAgent:
             steps.append({"stage": "generate", "mode": mode, "ms": round((_time.monotonic() - _tg) * 1000)})
         except StreamSafetyAbort as exc:
             # 流式增量审核命中违规：立即切换固定安全模板
+            # 防止模型输出不安全的医疗建议
             state.degraded_services.append("safety_stream_abort")
             state.warnings.append(str(exc))
             state.generated = self.medical_safety_service.build_fixed_safe_answer(state)
@@ -918,12 +966,13 @@ class ConsultAgent:
             )
         except KnowledgeConsultUnavailable as exc:
             # 本地 9B 偶发输出解析失败: deadline 内重试一次(2026-08-18)
-            # 但模型超时通常表示容量已经饱和，此时立即重试会形成重试风暴。
+            # 但模型超时通常表示容量已经饱和，此时立即重试会形成重试风暴
             if (
                 _should_retry_knowledge_failure(exc)
                 and not getattr(state, "_generate_retried", False)
                 and deadline.has_remaining(12.0)
             ):
+                # 满足重试条件：非超时类故障 + 未重试过 + 剩余预算充足
                 state._generate_retried = True
                 logger.warning(
                     "stage_generate_retry",
@@ -939,7 +988,7 @@ class ConsultAgent:
                         state.completeness.need_more_info
                         and state.completeness.reason in ("hard_need", "keyword_thin")
                     ):
-                        # 与主分支一致：信息不足时重试仍走 provisional。
+                        # 与主分支一致：信息不足时重试仍走 provisional
                         state.generated = await self.consultation_service.generate_provisional(
                             state, deadline=deadline.child(cap=15.0)
                         )
@@ -956,6 +1005,7 @@ class ConsultAgent:
                     )
                     steps.append({"stage": "generate_retry", "mode": mode, "ms": round((_time.monotonic() - _tg) * 1000)})
                 except KnowledgeConsultUnavailable as exc2:
+                    # 重试仍然失败 → 返回服务不可用
                     state.degraded_services.append("knowledge_consult")
                     state.warnings.append(str(exc2))
                     logger.warning(
@@ -964,6 +1014,7 @@ class ConsultAgent:
                     )
                     return self._service_unavailable(state, str(exc2))
             else:
+                # 不满足重试条件：超时类故障或预算不足 → 直接返回错误
                 state.degraded_services.append("knowledge_consult")
                 state.warnings.append(str(exc))
                 logger.warning(
@@ -1093,6 +1144,7 @@ class ConsultAgent:
                 },
             )
 
+        # 提取 RAG 检索结果的分类信息（用于后续输出过滤）
         rag_categories: tuple[str, ...] = ()
         if self.rag_retriever is not None and state.rag_result is not None:
             hit_ids = {hit.card_id for hit in state.rag_result.hits}
@@ -1103,6 +1155,9 @@ class ConsultAgent:
                     if card.get("id") in hit_ids and card.get("category")
                 )
             )
+        
+        # 清理面向用户的语言（去除兽医专业术语）
+        # 例如：去掉"建议转诊眼科"等不适合宠物主人的表述
         state.generated, language_cleaned = self.medical_safety_service.clean_owner_facing_language(
             state.generated,
             is_eye_case=state.case_facts.domain == "eye",
@@ -1115,7 +1170,8 @@ class ConsultAgent:
                 extra={"request_id": rid},
             )
 
-        # 9. 输出通用审核（场景化；受同一 deadline 约束）
+        # 阶段 11：输出通用审核（场景化；受同一 deadline 约束）
+        # 使用 Guard 审核生成的回答内容，检查是否包含违规或不安全内容
         _to = _time.monotonic()
         guard_output_timeout = (
             deadline.require(cap=self.s.guard_output_timeout)
@@ -1130,6 +1186,7 @@ class ConsultAgent:
         logger.info("stage_done", extra={"request_id": rid, "stage": "output_moderation", "ms": round((_time.monotonic() - _to) * 1000), "blocked": state.output_moderation.blocked})
         steps.append({"stage": "output_moderation", "ms": round((_time.monotonic() - _to) * 1000), "blocked": state.output_moderation.blocked})
         if state.output_moderation.blocked:
+            # 输出被审核拦截 → 进入人工审核流程
             return await self._review(state, key)
         output_moderation_ms = round((_time.monotonic() - _to) * 1000)
         await _emit_progress(
@@ -1138,7 +1195,8 @@ class ConsultAgent:
             ms=output_moderation_ms,
         )
 
-        # 10. 组装响应 + 存历史
+        # 阶段 12：组装响应 + 存历史
+        # 将所有结构化数据渲染为最终回答文本，保存到对话历史
         response = await self._answer(state, key)
         logger.info("pipeline_end", extra={"request_id": rid, "status": response.status.value, "answer_mode": response.answer_mode, "risk_level": response.risk_level.value if response.risk_level else "N/A", "total_ms": round((_time.monotonic() - _t0) * 1000), "answer_len": len(response.answer or ""), "answer_preview": (response.answer or "")[:300]})
         return response
@@ -1195,12 +1253,14 @@ class ConsultAgent:
         else:
             mode = "normal"
             generate = self.consultation_service.generate
-
+        # 构建咨询请求
         request = self.consultation_service.knowledge_consult.build_request(state, mode)
+        # 获取咨询适配器
         adapter = self.consultation_service.knowledge_consult.adapter
         answer_parts: list[str] = []
         checked_until = 0
         try:
+            # 流式生成咨询回答
             async for kind, value in adapter.generate_consultation_stream(
                 request=request,
                 deadline=deadline.child(cap=20.0),
@@ -1274,6 +1334,7 @@ class ConsultAgent:
                 normalize_species(state.pet_info.species) if state.pet_info else None
             ),
         )
+        # 构建直答结果
         state.generated = GeneratedConsultation(
             summary=payload["summary"],
             what_to_do_now=payload["what_to_do_now"],
@@ -1289,6 +1350,7 @@ class ConsultAgent:
             ),
             disclaimer=DEFAULT_DISCLAIMER,
         )
+        # 走医疗检查
         state.medical_review = await self.medical_safety_service.review(
             state.generated,
             red_flags=[],
@@ -1455,6 +1517,8 @@ class ConsultAgent:
         """
         if (self.dialogue_archive is None or not self.dialogue_archive.enabled) and self.dialogue_repo is None:
             return
+        
+        # 构建完整的对话记录（包含所有中间状态）
         record = {
 
                 "ts": utc_now_iso(),
@@ -1960,6 +2024,7 @@ class ConsultAgent:
         """
         from app.schemas.conversation import ConversationTurn
 
+        # 构建对话轮次记录
         turn = ConversationTurn(
             turn_id="",
             created_at=utc_now_iso(),
@@ -2026,15 +2091,18 @@ class ConsultAgent:
         assert key is not None
         tenant, user = command.auth.tenant_id, command.auth.user_id
 
+        # 第一步：查缓存
         cached = await self.idempotency_repo.get_result(tenant, user, key, request_hash)
         if cached:
             return ConsultResponse.model_validate_json(cached)
+        
+        # 第二步：尝试占位
         if await self.idempotency_repo.try_claim(
             tenant, user, key, request_hash, owner=owner
         ):
             return None
 
-        # 已有请求在处理：轮询至自己的剩余预算（不再固定只等 2s）
+        # 第三步：轮询等待（已有请求在处理）
         wait_started = __import__("time").monotonic()
         logger.info(
             "idempotency_wait_started",
@@ -2052,6 +2120,8 @@ class ConsultAgent:
             ):
                 return None
             await asyncio.sleep(0.2)
+        
+        # 第四步：超时处理
         logger.warning(
             "idempotency_wait_timeout",
             extra={
@@ -2201,6 +2271,18 @@ class ConsultAgent:
         )
 
     async def close(self) -> None:
+        """关闭所有外部服务连接（资源清理）。
+        
+        【清理对象】
+        - image_service：图片解析服务
+        - moderation：审核服务
+        - consultation_service：问诊生成服务
+        - conversation_service：会话管理服务
+        
+        【调用时机】
+        - 应用关闭时
+        - 服务重启时
+        """
         for svc in (
             self.image_service,
             self.moderation,
